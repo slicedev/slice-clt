@@ -11,7 +11,7 @@
       ```
       php slice-clt.php <HTTP METHOD> <PATH> <USERNAME> ["param" "value"] ["param" "value"]
       ```
-   1. When testing eith OAuth token, username is not needed
+   1. When testing with OAuth token, username is not needed
 
 ## Usage Instructions:
 Execute test script. e.g.
