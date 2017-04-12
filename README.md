@@ -2,27 +2,15 @@
 
 ## Initial Setup:
 
-1. Put `slice-clt.php` and `api_functions.php` in a new empty directory.
-1. Update the three configs at the top of `slice-clt.php`:
-  - Set `client_id` to be the client id provided by Slice.
-  - Set the Base URL to the server name you have been using for development, or that
-   has been provided by Slice (must match `client_id`).
-  - Usually you will leave the locale as `en_US`.
-1. Create a new file in the same directory called `myprivatekey.pem`, which contains the
-   private key you generated when being provisioned (must match `client_id`, and must match
-   the public key Slice has recorded for you).
-   
-
+1. clone repo
+1. copy private key file to this directory
+1. edit test.sh
+  1. set PARTNER_CLIENT_ID to your client id
+  1. set KEY_FILE to name of your private key file
+  1. Add command you would like to execute. The command is of the form
+    php slice-clt.php <HTTP METHOD> <PATH> <USERNAME> ["param" "value"] ["param" "value"]
+  1. When testing eith OAuth token, username is not needed
 
 ## Usage Instructions:
-
-Invoke the script in the following way:
-
-  `php slice-clt.php METHOD PATH USERNAME [PARAM1 VALUE1 [PARAM2 VALUE2 ... ]]`
-
-e.g.
-
-  `php slice-clt.php GET /api/v1/orders vpo_test2 limit 10`
-
-The script will output the full request including signature string, and the JSON response
-that came back from the server.
+Execute test script. e.g.
+./test.sh

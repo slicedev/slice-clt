@@ -1,209 +1,200 @@
 <?php
 $client_id = '';
-$baseurl = '';
+$key_file = 'myprivatekey.pem';
+$base_url = '';
+$use_proxy = false;
+$oauth_token = '';
 
 $elbcookie = '';
+$content_type = '';
+$content_encoding = '';
+$content_length = 0;
 $connect_timeout = 2;
 $request_timeout = 10;
-
-$useProxy = false;
 
 function set_client_id($passed_client_id) {
 	global $client_id;
 	$client_id = $passed_client_id;
 }
 
-function set_base_url($passed_baseurl) {
-	global $baseurl;
-	$baseurl = $passed_baseurl;
+function set_key_file($passed_key_file) {
+	global $key_file;
+	$key_file = $passed_key_file;
 }
 
-function curl_header_callback($resURL, $strHeader) { 
-	if (preg_match('/^set-cookie/i', $strHeader) && preg_match('/AWSELB=/', $strHeader)) { 
+function set_base_url($passed_baseurl) {
+	global $base_url;
+	$base_url = $passed_baseurl;
+}
+
+function set_use_proxy($passed_use_proxy) {
+	global $use_proxy;
+	$use_proxy = $passed_use_proxy;
+}
+
+function set_oauth_token($passed_oauth_token) {
+	global $oauth_token;
+	$oauth_token = $passed_oauth_token;
+}
+
+function set_connect_timeout($passed_connect_timeout) {
+	global $connect_timeout;
+	$connect_timeout = $passed_connect_timeout;
+}
+
+function set_request_timeout($passed_request_timeout) {
+	global $request_timeout;
+	$request_timeout = $passed_request_timeout;
+}
+
+function curl_header_callback($resURL, $strHeader) {
+	global $content_type, $content_encoding, $content_length;
+	if (preg_match('/^set-cookie/i', $strHeader) && preg_match('/AWSELB=/', $strHeader)) {
 		$regex_pattern = "/AWSELB=([^;]+);/";
 		preg_match_all($regex_pattern, $strHeader, $cookievalues);
-		error_log('Received header:' . $cookievalues[1][0]); 
+		error_log('Received header:' . $cookievalues[1][0]);
 		// $jsessionid = $cookievalues[1][0];
-	} 
-	return strlen($strHeader); 
-} 
+	}
+	if (preg_match('/^content-type/i', $strHeader)) {
+		echo $strHeader . "\n";
+		list($key, $val) = explode(":", $strHeader);
+		$content_type = $val;
+	}
+	if (preg_match('/^content-encoding/i', $strHeader)) {
+		echo $strHeader . "\n";
+		list($key, $val) = explode(":", $strHeader);
+		$content_encoding = $val;
+	}
+	if (preg_match('/^content-length/i', $strHeader)) {
+		echo $strHeader . "\n";
+		list($key, $val) = explode(":", $strHeader);
+		$content_length = intval($val);
+	}
+	return strlen($strHeader);
+}
 
-function slice_request($method, $path, $username, $request_params) {
-	global $baseurl;
+function get_param_value($paramValue) {
+	if ($paramValue == '') {
+		return $paramValue;
+	}
+	if (strpos($paramValue, 'file:') === 0) {
+		$filename = substr($paramValue, 5);
+		if ($paramValue == '') {
+			return $paramValue;
+		}
+		$content = file_get_contents($filename);
+		// echo "CONTENT:" . $content . "\n";
+		return $content;
+	} else {
+		return $paramValue;
+	}
+}
+
+function appendUrlParameters($url, $request_params) {
+	if ($request_params == '') {
+		return $url;
+	}
+	if (strpos($url, '?') !== false) {
+		$url .= '&' . $request_params;
+	} else {
+		$url .= '?' . $request_params;
+	}
+	return $url;
+}
+
+function slice_request($method, $path, $username, $request_params, $requestId) {
+	global $base_url, $client_id, $content_type, $content_encoding, $content_length, $oauth_token;
 
 	//error_log("----- start slice request -----");
 
-	$url = $baseurl . $path;
-	if (strpos($url, '?') !== false) {
-		$url .= '&' . $request_params;
-	} else {
-		$url .= '?' . $request_params;
+	$url = $base_url . $path;
+
+	// We need this so that it's easier to track the requests in server access log
+	$reqIdStr = "reqId=" . $requestId;
+	$url = appendUrlParameters($url, $reqIdStr);
+	if ($method != 'POST' && $method != 'PUT') {
+		$url = appendUrlParameters($url, $request_params);
 	}
 
 	$ch = curl_init();
-	$auth_hdr = get_signature_header($method, $path, $username);
-	if (!isset($auth_hdr)) {
-		error_log("Can't compute signature");
-		return NULL;
+
+	$hdrs = array();
+	$auth_hdr = '';
+	if ($oauth_token != '') {
+		echo "OAuth token authorization\n";
+		$auth_hdr = 'Authorization: Bearer ' . $oauth_token;
+		$hdrs[] = $auth_hdr;
+	} else {
+		$auth_hdr = get_signature_header($method, $path, $username);
+		if (!isset($auth_hdr)) {
+			error_log("Can't compute signature");
+			return NULL;
+		}
+		$auth_hdr = 'X-Slice-API-Signature: ' . $auth_hdr;
+		$hdrs[] = $auth_hdr;
 	}
+
+	if (count($hdrs) > 0) {
+		curl_setopt($ch, CURLOPT_HTTPHEADER, $hdrs);
+	}
+
 	set_common_curlopts($ch, $method, $url, $auth_hdr);
+
+	if ($method == 'POST' || $method == 'PUT') {
+		echo "HTTP PARAMS IN BODY : " . $request_params . "\n";
+		curl_setopt($ch, CURLOPT_POSTFIELDS, $request_params);
+	} else {
+		echo "HTTP PARAMS : " . $request_params . "\n";
+	}
 
 	$response = curl_exec($ch);
 	handle_response($method, $url, $ch, $response);
 
 	# The HTTP response body contains a JSON object, decode it to convert it to PHP object
 	$response_object = json_decode($response);
+	$response_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 	curl_close($ch);
 
 	//error_log("----- end slice request -----");
-	
+
 	$out = array();
 	$out['url'] = $url;
 	$out['method'] = $method;
-	$out['signature'] = $auth_hdr;
+	$out['auth_hdr'] = $auth_hdr;
 	$out['response'] = $response_object;
+	$out['response_code'] = $response_code;
+	$out['response_text'] = $response;
+	$out['content_type'] = $content_type;
+	$out['content_encoding'] = $content_encoding;
+
+	if ($content_length == 0) {
+		$content_length = strlen($response);
+	}
+	$out['content_length'] = $content_length;
+
 	return $out;
 }
 
-function slice_post_request($path, $username, $request_params) {
-	global $baseurl;
-
-	error_log("----- start slice request -----");
-
-	$url = $baseurl . $path;
-
-	$ch = curl_init();
-	$method = 'POST';
-        $auth_hdr = get_signature_header($method, $path, $username);
-	set_common_curlopts($ch, $method, $url, $auth_hdr);
-
-	curl_setopt($ch, CURLOPT_POSTFIELDS, $request_params);
-
-	$response = curl_exec($ch);
-	handle_response($method, $url, $ch, $response);
-
-	# The HTTP response body contains a JSON object, decode it to convert it to PHP object
-	$response_object = json_decode($response);
-	curl_close($ch);
-
-	error_log("----- end slice request -----");
-
-	return $response_object;
-}
-
-function slice_put_request($path, $username, $request_params) {
-	global $baseurl;
-
-	error_log("----- start slice request -----");
-
-	$url = $baseurl . $path;
-
-	$ch = curl_init();
-	$method = 'PUT';
-        $auth_hdr = get_signature_header($method, $path, $username);
-	if (!isset($auth_hdr)) {
-		error_log("Can't compute signature");
-		return NULL;
-	}
-	set_common_curlopts($ch, $method, $url, $auth_hdr);
-
-	curl_setopt($ch, CURLOPT_POSTFIELDS, $request_params);
-
-	$response = curl_exec($ch);
-	handle_response($method, $url, $ch, $response);
-
-	# The HTTP response body contains a JSON object, decode it to convert it to PHP object
-	$response_object = json_decode($response);
-	curl_close($ch);
-
-	error_log("----- end slice request -----");
-
-	return $response_object;
-}
-
-function slice_get_request($path, $username, $request_params) {
-	global $baseurl;
-
-	error_log("----- start slice request -----");
-
-	$url = $baseurl . $path;
-	if (strpos($url, '?') !== false) {
-		$url .= '&' . $request_params;
-	} else {
-		$url .= '?' . $request_params;
-	}
-
-	$ch = curl_init();
-	$method = 'GET';
-        $auth_hdr = get_signature_header($method, $path, $username);
-	if (!isset($auth_hdr)) {
-		error_log("Can't compute signature");
-		return NULL;
-	}
-	set_common_curlopts($ch, $method, $url, $auth_hdr);
-
-	$response = curl_exec($ch);
-	handle_response($method, $url, $ch, $response);
-
-	# The HTTP response body contains a JSON object, decode it to convert it to PHP object
-	$response_object = json_decode($response);
-	curl_close($ch);
-
-	error_log("----- end slice request -----");
-
-	return $response_object;
-}
-
-function slice_delete_request($path, $username, $request_params) {
-	global $baseurl;
-
-	error_log("----- start slice request -----");
-
-	$url = $baseurl . $path;
-	if (strpos($url, '?') !== false) {
-		$url .= '&' . $request_params;
-	} else {
-		$url .= '?' . $request_params;
-	}
-
-	$ch = curl_init();
-	$method = 'DELETE';
-        $auth_hdr = get_signature_header($method, $path, $username);
-	if (!isset($auth_hdr)) {
-		error_log("Can't compute signature");
-		return NULL;
-	}
-	set_common_curlopts($ch, $method, $url, $auth_hdr);
-
-	$response = curl_exec($ch);
-	handle_response($method, $url, $ch, $response);
-
-	# The HTTP response body contains a JSON object, decode it to convert it to PHP object
-	$response_object = json_decode($response);
-	curl_close($ch);
-
-	error_log("----- end slice request -----");
-
-	return $response_object;
-}
-
 function set_common_curlopts($ch, $method, $url, $auth_hdr) {
-	global $useProxy, $elbcookie, $connect_timeout, $request_timeout;
+	global $use_proxy, $userAgent, $elbcookie, $connect_timeout, $request_timeout;
 
 	$hostname = php_uname('n');
 	date_default_timezone_set('America/Los_Angeles');
 	$user_agent = $hostname . '-' . date('Y-m-d-H-i-s');
+	if (isset($userAgent)) {
+		$user_agent = $user_agent . " " . $userAgent;
+	}
 
 	curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
 	curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-	if ($useProxy) {
-		curl_setopt($ch, CURLOPT_PROXY, "http://localhost:8888"); 
-		curl_setopt($ch, CURLOPT_PROXYPORT, 8888); 
+	if ($use_proxy) {
+		echo "===== Using Proxy =====\n";
+		curl_setopt($ch, CURLOPT_PROXY, "http://localhost:8888");
+		curl_setopt($ch, CURLOPT_PROXYPORT, 8888);
 	}
 	curl_setopt($ch, CURLOPT_URL, $url);
 	curl_setopt($ch, CURLOPT_USERAGENT, $user_agent);
-
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array('X-Slice-API-Signature: ' . $auth_hdr));
+	curl_setopt($ch, CURLOPT_ENCODING, "");
 
 	curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
 	curl_setopt($ch, CURLOPT_HEADERFUNCTION, 'curl_header_callback');
@@ -218,18 +209,18 @@ function set_common_curlopts($ch, $method, $url, $auth_hdr) {
 }
 
 function handle_response($method, $url, $ch, $response) {
-	error_log("got response for : " . $method . "," . $url, 0);
+	// error_log("got response for : " . $method . "," . $url, 0);
 	$info = curl_getinfo($ch);
-	error_log("Response code was : ".$info['http_code'], 0);
+	// error_log("Response code was : ".$info['http_code'], 0);
 	// error_log("response was : " . $response, 0);
 }
 
 function get_private_key() {
+	global $key_file;
 	$private_key = NULL;
-	$filename = "myprivatekey.pem";
-	if (file_exists($filename)) {
-		error_log("Private Key File :" . $filename);
-		$private_key = file_get_contents($filename);
+	if (file_exists($key_file)) {
+		error_log("Private Key File :" . $key_file);
+		$private_key = file_get_contents($key_file);
 	}
 
 	return $private_key;
@@ -246,7 +237,7 @@ function get_signature_header($method, $path, $username) {
 	$auth_hdr =	"client_id=" . $client_id .
 			"&timestamp=" . $timestamp .
 			"&request_signature=" . urlencode($request_signature);
-	if (isset($username)) {
+	if (isset($username) && $username != '') {
 		$auth_hdr = $auth_hdr . "&username=" . $username;
 	}
 	return $auth_hdr;
